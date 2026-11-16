@@ -1,0 +1,23 @@
+import test from 'node:test';import assert from 'node:assert/strict';import http from 'node:http';import {AiStudioService} from './ai-core.js';import {registerAi} from './ai-host.js';import {ApiConfigStore} from './ai-api-config.js';
+const png='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aWQAAAAASUVORK5CYII=';
+test('custom HTTP workflow is independent of Codex/session; config check offline and key never echoed',async t=>{
+ let record,route,tool,origin,edits=0,attachments=0;const store=new ApiConfigStore({readRecord:async()=>structuredClone(record),modifyRecord:async(_key,fn)=>record=await fn(structuredClone(record))});
+ const service=new AiStudioService({status:async provider=>provider==='custom'?{...await store.view(),available:!!await store.getConfig(),engine:'Custom image API'}:{available:false,engine:'Codex image'},edit:async args=>{assert.equal(args.provider,'custom');assert.equal(args.configRevision,(await store.getConfig()).revision);edits++;return{imageDataUrl:png};}});
+ const ctx={tools:{register:value=>(tool=value,()=>{})},attachments:{saveImage:async()=>{attachments++;return{attachmentId:'sha256:'+('0'.repeat(64)),mediaType:'image/png',bytes:68,width:1,height:1};}},webServer:{getOrigin:()=>origin,register:value=>(route=value,()=>{})}};
+ const dispose=registerAi(ctx,service,store),server=http.createServer((req,res)=>route.handler(req,res));await new Promise(r=>server.listen(0,'127.0.0.1',r));origin=`http://127.0.0.1:${server.address().port}`;t.after(async()=>{dispose();await service.close();server.closeAllConnections();await new Promise(r=>server.close(r));});
+ const request=async data=>{const response=await fetch(origin,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json','X-DSH-Bead-Studio':'1'},body:typeof data==='string'?data:JSON.stringify(data)});return{code:response.status,body:await response.json()};};
+ assert.equal((await request({action:'status',provider:'custom'})).body.available,false);
+ assert.equal((await request({action:'custom_check'})).body.valid,false);
+ const saved=await request({action:'custom_save',baseUrl:'https://images.example.com/v1',model:'gpt-image-1',apiKey:'fake-test-key',expectedRevision:''});assert.equal(saved.code,200);assert.doesNotMatch(JSON.stringify(saved),/fake-test-key/);
+ assert.equal((await request({action:'custom_check'})).body.valid,true);assert.equal(edits,0);
+ let reads=0;store.discoverModels=async input=>{reads++;assert.equal(input.apiKey,'fake-test-key');return{models:[{id:'image-accurate-id',imageCandidate:true,editingVerified:false}],truncated:false};};
+ const models=await request({action:'custom_models',baseUrl:saved.body.baseUrl,expectedRevision:saved.body.revision});assert.equal(models.code,200);assert.equal(models.body.models[0].id,'image-accurate-id');assert.equal(reads,1);assert.equal(edits,0);assert.doesNotMatch(JSON.stringify(models),/fake-test-key/);assert.deepEqual(await store.view(),saved.body);
+ await assert.rejects(tool.execute({action:'custom_models'},{}),/user interface/);
+ await assert.rejects(tool.execute({action:'custom_save',apiKey:'never-allow'},{}),/user interface/);
+ const bad=await request('{"action":"custom_save","apiKey":"do-not-echo",');assert.equal(bad.code,400);assert.doesNotMatch(JSON.stringify(bad),/do-not-echo/);
+ const args={action:'start',provider:'custom',configRevision:saved.body.revision,imageDataUrl:png,style:'faithful',background:'white',width:32,maxColors:8};
+ const started=await request(args);assert.equal(started.code,200);assert.equal(service.jobs.get(started.body.id).sessionId,undefined);await service.jobs.get(started.body.id).promise;assert.equal((await request({action:'poll',id:started.body.id})).body.imageDataUrl,png);assert.equal(attachments,0);assert.equal(edits,1);
+ const cleared=await request({action:'custom_clear',expectedRevision:saved.body.revision});assert.equal(cleared.body.hasKey,false);assert.equal((await request(args)).code,400);assert.equal(edits,1);
+ const saved2=await request({action:'custom_save',baseUrl:'https://images.example.com/v1',model:'gpt-image-1',apiKey:'fake-test-key',expectedRevision:cleared.body.revision});
+ const result=await tool.execute({...args,configRevision:saved2.body.revision},{agent:{id:'test-caller'}});await service.jobs.get(result.id).promise;const view=await tool.execute({action:'poll',id:result.id,includeImage:true},{agent:{id:'test-caller'}});assert.ok(view.imageAttachment);assert.equal(view.imageDataUrl,undefined);assert.equal(attachments,1);await tool.execute({action:'poll',id:result.id,includeImage:true},{agent:{id:'test-caller'}});assert.equal(attachments,1);
+});

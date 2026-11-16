@@ -1,0 +1,14 @@
+node_modules/
+test-output/
+test-deps/
+__pycache__/
+*.pyc
+*.tgz
+*.log
+.env
+.env.*
+.npmrc
+.publish-files.json
+coverage/
+.DS_Store
+Thumbs.db

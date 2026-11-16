@@ -1,0 +1,9 @@
+- insert:
+    - id: local-bead-studio
+      name: '@sanmumu/dsh-bead-studio'
+    - id: local-bead-projects
+      name: '@sanmumu/dsh-bead-studio/library'
+    - id: local-bead-editor
+      name: '@sanmumu/dsh-bead-studio/editor'
+    - id: local-bead-ai
+      name: '@sanmumu/dsh-bead-studio/ai'
